@@ -1,0 +1,50 @@
+# Katha render worker — copy to .github/workflows/katha-worker.yml in the worker's OWN private repo.
+# Each run is short (a few minutes): health check, heartbeat, then submit/collect/claim one chunk. Rendering happens on Kaggle.
+# Secrets (Settings → Secrets and variables → Actions), all belonging to the account owner:
+#   KAGGLE_API_TOKEN     – your own Kaggle API token (Kaggle → Settings → API Tokens)
+#   KATHA_WORKER_TOKEN   – the worker token the orchestrator owner issued for you
+#   KATHA_CODE_TOKEN     – only if the Katha code repo is private: a read-only GitHub token for it
+#   AGNES_API_KEY        – owner only: lets this worker paint the shot images (Agnes blocks Cloudflare servers)
+# Variables:
+#   KAGGLE_USERNAME      – your Kaggle username
+#   KATHA_ORCH_URL       – orchestrator URL, e.g. https://katha-orchestrator.<name>.workers.dev
+#   KATHA_CODE_REPO / KATHA_CODE_REF – where the Katha code lives and which tag to run
+#   KATHA_QUOTA_REMAINING_H (optional) – hours left on your Kaggle quota page, if the estimate drifts
+#   KATHA_CAN_ASSEMBLE (optional, owner only) – "1"
+name: katha-worker
+on:
+  schedule:
+    - cron: "*/20 * * * *"        # every 20 minutes; idle runs exit in ~1 minute
+  workflow_dispatch: {}
+concurrency:
+  group: katha-worker              # never two passes at once for the same account
+  cancel-in-progress: false
+jobs:
+  pass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.KATHA_CODE_REPO || github.repository }}
+          ref: ${{ vars.KATHA_CODE_REF || 'main' }}   # pin to a release tag you trust, e.g. v1.0.0
+          token: ${{ secrets.KATHA_CODE_TOKEN || github.token }}
+          sparse-checkout: |
+            katha
+            katha-studio/katha
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q "kaggle>=1.8" six pillow
+      - name: worker pass
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_USERNAME: ${{ vars.KAGGLE_USERNAME }}
+          KATHA_WORKER_TOKEN: ${{ secrets.KATHA_WORKER_TOKEN }}
+          KATHA_ORCH_URL: ${{ vars.KATHA_ORCH_URL }}
+          KATHA_QUOTA_REMAINING_H: ${{ vars.KATHA_QUOTA_REMAINING_H }}
+          KATHA_CAN_ASSEMBLE: ${{ vars.KATHA_CAN_ASSEMBLE }}
+          AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
+        run: |
+          [ -d katha ] || cd katha-studio      # code may sit at the repo root or in katha-studio/
+          python -m katha.cloud.worker
